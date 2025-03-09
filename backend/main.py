@@ -4,6 +4,11 @@ from PIL import Image
 import pytesseract
 import io
 import pdfplumber
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+pytesseract.pytesseract.tesseract_cmd =  os.getenv("PATH_TO_TESSERACT")
 
 app = FastAPI()
 
