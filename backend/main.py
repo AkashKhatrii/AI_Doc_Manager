@@ -11,14 +11,15 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methos=["*"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
 @app.post("/extract-text")
 async def exytact_text(file: UploadFile = File(...)):
     content = await file.read()
-
+    if not file.content_type:
+        return {"error": "Invalid file type"}
     if file.content_type == "application/pdf":
         with pdfplumber.open(io.BytesIO(content)) as pdf:
             text = "\n".join(page.extract_text() for page in pdf.pages)
