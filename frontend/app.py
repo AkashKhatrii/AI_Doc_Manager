@@ -4,14 +4,16 @@ import requests
 st.title("Document AI Assistant")
 
 uploaded_file = st.file_uploader("Upload Document (PDF/Image)", type=["pdf", "png", "jpg", "jpeg"])
+category = st.selectbox("Select Category", ["medical", "finance", "academic", "other"])
 
 if uploaded_file:
     if st.button("Extract Text"):
         with st.spinner("Processing document..."):
             files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
+            data = {"category": category}
 
             try:
-                response = requests.post("http://localhost:8000/upload/", files=files)
+                response = requests.post("http://localhost:8000/upload/", files=files, data=data)
                 response.raise_for_status()
 
                 data = response.json()
@@ -27,9 +29,9 @@ if uploaded_file:
 query = st.text_input("Ask a question about your document:")
 if st.button("Get answer"):
     with st.spinner("Thinking..."):
-        response = requests.post("http://localhost:8000/ask/", data={"query": query})
+        response = requests.post("http://localhost:8000/ask/", data={"query": query}).json()
 
-        if response.status_code == 200:
-            st.write("AI Answer: ", response.json()["answer"])
+        if "answer" in response:
+            st.write("**Answer:**", response["answer"])
         else:
-            st.error("Error getting answer.")
+            st.error(f"{response.get('error', 'Unknown error occurred.')}")
