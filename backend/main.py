@@ -80,8 +80,8 @@ async def upload_text(file: UploadFile = File(...), category: str = Form(...), d
 # Predefined categories & descriptions
 CATEGORY_DESCRIPTIONS = {
     "medical": "Health records, prescriptions, diagnosis reports, medical history",
-    "finance": "Investment details, salary statements, budget plans, bank transactions",
-    "academic": "Exam results, grades, GPA, coursework, academic performance",
+    # "finance": "Investment details, salary statements, budget plans, bank transactions",
+    "academic": "Exam results, grades, GPA, coursework, academic performance, jobs",
     "legal": "Contracts, agreements, property documents, legal papers",
     "personal": "Diary entries, personal notes, memories, family records"
 }
@@ -131,12 +131,22 @@ async def ask_question(query: str = Form(...)):
 
         # prompt to force GPT to use retrieved documents
         prompt = f"""
-        You are an AI assistant with access to user documents. Use the following extracted content to answer the question.
-        
-        **Extracted Document Context:**
+        You are an AI assistant that can provide insights based on both:
+        1. The user's personal documents (extracted from their uploads).
+        2. Your general AI knowledge.
+
+        **User's Document Category:** {category}
+
+        **Extracted Document Context:** 
         {document_context}
 
         **User Question:** {query}
+
+        **Instructions for Answering:**
+        - Use the extracted document context where relevant.
+        - If the documents don't fully answer the question, provide insights based on general AI knowledge.
+        - Ensure the response is relevant to the category: {category}.
+        - Structure the response clearly and concisely.
         """
 
         llm = ChatOpenAI()
@@ -147,7 +157,7 @@ async def ask_question(query: str = Form(...)):
         if not response_text or response_text.strip() == "":
             return {"error": "AI did not generate a response. Try rephrasing your question.", "category_used": category}
 
-        print(f"AI Response: {response_text}")
+        # print(f"AI Response: {response_text}")
         return {"answer": response_text, "category_used": category}
     except Exception as e:
         print("exception error")
