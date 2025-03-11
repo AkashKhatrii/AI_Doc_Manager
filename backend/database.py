@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean
 from sqlalchemy.orm import sessionmaker, declarative_base
 import datetime
 import os
@@ -19,7 +19,7 @@ class Document(Base):
     category = Column(String, index=True)
     text_content = Column(Text) # full extracted text
     upload_date = Column(DateTime, default=datetime.datetime.utcnow)
-
+    vectorized = Column(Boolean, default=False)
 
 Base.metadata.create_all(bind=engine)
 
