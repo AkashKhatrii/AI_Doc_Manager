@@ -4,7 +4,7 @@ import requests
 st.title("Document AI Assistant")
 
 uploaded_file = st.file_uploader("Upload Document (PDF/Image)", type=["pdf", "png", "jpg", "jpeg"])
-category = st.selectbox("Select Category", ["medical", "finance", "academic", "other"])
+category = st.selectbox("Select Category", ["medical", "finance", "academic", "personal", "other"])
 
 if uploaded_file:
     if st.button("Extract Text"):
@@ -20,7 +20,7 @@ if uploaded_file:
                 if "error" in data:
                     st.error(f"Error: {data['error']}")
                 else:
-                    st.text_area("Document processed! Now you can ask questions.")
+                    st.write("Document processed! Now you can ask questions.")
             except requests.exceptions.RequestException as e:
                 st.error(f"API request failed: {e}")
             
