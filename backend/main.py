@@ -16,8 +16,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sqlalchemy.orm import Session
 from sklearn.metrics.pairwise import cosine_similarity
 
-from database import Document, get_db
-
+from database import Document, get_db, SessionLocal
+import subprocess
 load_dotenv()
 pytesseract.pytesseract.tesseract_cmd =  os.getenv("PATH_TO_TESSERACT")
 
@@ -34,21 +34,79 @@ app.add_middleware(
 embeddings = OpenAIEmbeddings()
 vector_db =  {} # Dictionary to store FAISS index per category
 
+def load_existing_vectors():
+    global vector_db
+    db = SessionLocal()
+
+    docs = db.query(Document).filter(Document.vectorized == True).all()
+
+
+    category_texts = {}
+    for doc in docs:
+        if doc.category not in category_texts:
+            category_texts[doc.category] = []
+        category_texts[doc.category].append(doc.text_content)
+
+    for category, texts in category_texts.items():
+        vector_db[category] = FAISS.from_texts(texts, embeddings)
+
+    db.close()
+
+load_existing_vectors()
+
+
 def extract_text(file_bytes, content_type):
-    if content_type == "application/pdf":
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            return "\n".join(page.extract_text() for page in pdf.pages if page.extract_text())
-    elif content_type.startswith("image/"):
-        image = Image.open(io.BytesIO(file_bytes))
-        return pytesseract.image_to_string(image)
-    
-    return None
+    try:
+        if content_type == "application/pdf":
+            with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+                return "\n".join(page.extract_text() for page in pdf.pages if page.extract_text())
+
+        elif content_type.startswith("image/"):
+            image = Image.open(io.BytesIO(file_bytes))
+
+            # Convert image to grayscale (improves OCR accuracy)
+            image = image.convert("L")
+
+            # Explicitly set tesseract path
+            TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+            pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+
+            if not os.path.exists(TESSERACT_PATH):
+                raise FileNotFoundError(f"Tesseract not found at {TESSERACT_PATH}. Please install it.")
+
+            # Convert image to a format Tesseract can read (save to BytesIO)
+            image_bytes = io.BytesIO()
+            image.save(image_bytes, format="PNG")  # PNG works well for OCR
+            image_bytes.seek(0)
+
+            extracted_text = pytesseract.image_to_string(image)
+
+            if not extracted_text.strip():
+                return "No readable text found in the image."
+
+            return extracted_text
+
+        else:
+            return None
+
+    except subprocess.SubprocessError as e:
+        print(f"Subprocess error in Tesseract: {str(e)}")
+        return "Error: Unable to run Tesseract due to system permissions."
+
+    except Exception as e:
+        print(f"Error processing file ({content_type}): {str(e)}")
+        return f"Error processing file: {str(e)}"
 
 @app.post("/upload")
 async def upload_text(file: UploadFile = File(...), category: str = Form(...), db: Session = Depends(get_db)):
 
     global vector_db
 
+    existing_doc = db.query(Document).filter(Document.filename == file.filename).first()
+
+    if existing_doc and existing_doc.vectorized:
+        return {"message": "File already processed", "category": existing_doc.category}
+    
     content = await file.read()
     text = extract_text(content, file.content_type)
 
@@ -56,12 +114,12 @@ async def upload_text(file: UploadFile = File(...), category: str = Form(...), d
         return {"error": "could not extract text"}
     
     # Store document metadata in DB
-    new_doc = Document(filename=file.filename, category=category, text_content=text)
+    new_doc = Document(filename=file.filename, category=category, text_content=text, vectorized=True)
     db.add(new_doc)
     db.commit()
     
     # split text into smaller chunks
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=50)
     text_chunks = text_splitter.split_text(text)
     if len(text_chunks) == 0:
         return {"error": "No valid text found to process"}
@@ -83,7 +141,7 @@ CATEGORY_DESCRIPTIONS = {
     # "finance": "Investment details, salary statements, budget plans, bank transactions",
     "academic": "Exam results, grades, GPA, coursework, academic performance, jobs",
     "legal": "Contracts, agreements, property documents, legal papers",
-    "personal": "Diary entries, personal notes, memories, family records"
+    "personal": "Diary entries, personal notes, memories, family records, identity cards"
 }
 
 
