@@ -3,26 +3,34 @@ import requests
 
 st.title("Document AI Assistant")
 
-uploaded_file = st.file_uploader("Upload Document (PDF/Image)", type=["pdf", "png", "jpg", "jpeg"])
-category = st.selectbox("Select Category", ["medical", "finance", "academic", "personal", "other"])
+uploaded_files = st.file_uploader(
+    "Upload multiple documents (PDFs/Images)", 
+    type=["pdf", "png", "jpg", "jpeg"], 
+    accept_multiple_files=True
+)
 
-if uploaded_file:
+category = st.selectbox("Select Category", ["medical", "academic", "legal", "personal"])
+
+if uploaded_files:
     if st.button("Extract Text"):
-        with st.spinner("Processing document..."):
-            files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
+        with st.spinner("Processing documents..."):
+            # Format files as list of tuples
+            files = [("files", (f.name, f.getvalue(), f.type)) for f in uploaded_files]
             data = {"category": category}
 
             try:
                 response = requests.post("http://localhost:8000/upload/", files=files, data=data)
                 response.raise_for_status()
 
-                data = response.json()
-                if "error" in data:
-                    st.error(f"Error: {data['error']}")
+                result = response.json()
+                if "error" in result:
+                    st.error(f"Error: {result['error']}")
                 else:
-                    st.write("Document processed! Now you can ask questions.")
+                    st.success(f"{result['chunks_added']} chunks added from {len(uploaded_files)} documents.")
+                    st.write("You can now ask questions.")
             except requests.exceptions.RequestException as e:
                 st.error(f"API request failed: {e}")
+
             
 
 

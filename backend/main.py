@@ -31,7 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-embeddings = OpenAIEmbeddings()
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 vector_db =  {} # Dictionary to store FAISS index per category
 
 def load_existing_vectors():
@@ -98,50 +98,74 @@ def extract_text(file_bytes, content_type):
         return f"Error processing file: {str(e)}"
 
 @app.post("/upload")
-async def upload_text(file: UploadFile = File(...), category: str = Form(...), db: Session = Depends(get_db)):
+async def upload_text(files: list[UploadFile] = File(...), category: str = Form(...), db: Session = Depends(get_db)):
 
     global vector_db
+    all_chunks = []
+    for file in files:
+        existing_doc = db.query(Document).filter(Document.filename == file.filename).first()
 
-    existing_doc = db.query(Document).filter(Document.filename == file.filename).first()
+        if existing_doc and existing_doc.vectorized:
+            continue
 
-    if existing_doc and existing_doc.vectorized:
-        return {"message": "File already processed", "category": existing_doc.category}
+    # if existing_doc and existing_doc.vectorized:
+    #     return {"message": "File already processed", "category": existing_doc.category}
+
+        content = await file.read()
+        text = extract_text(content, file.content_type)
+        if not text:
+            continue
+
+        doc = Document(filename=file.filename, category=category, text_content=text, vectorized=True)
+        db.add(doc)    
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=50)
+        text_chunks = text_splitter.split_text(text)
+        clean_chunks = [c for c in text_chunks if isinstance(c, str) and c.strip()]
+
+        all_chunks.extend(clean_chunks)
     
-    content = await file.read()
-    text = extract_text(content, file.content_type)
-
-    if not text:
-        return {"error": "could not extract text"}
-    
-    # Store document metadata in DB
-    new_doc = Document(filename=file.filename, category=category, text_content=text, vectorized=True)
-    db.add(new_doc)
     db.commit()
-    
-    # split text into smaller chunks
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=50)
-    text_chunks = text_splitter.split_text(text)
-    if len(text_chunks) == 0:
-        return {"error": "No valid text found to process"}
+    if not all_chunks:
+        return {"error": "No valid text chunks found across all files."}
 
-    # Store extracted text as embeddings in FAISS (category-wise)
-    if category not in vector_db:
-        vector_db[category] = FAISS.from_texts(text_chunks, embeddings)
-    else:
-        vector_db[category].add_texts(text_chunks)
+    try:
+        if category not in vector_db:
+            vector_db[category] = FAISS.from_texts(all_chunks, embeddings)
+        else:
+            vector_db[category].add_texts(all_chunks)
+    except Exception as e:
+        print("FAISS error:", str(e))
+        return {"error": f"Failed to embed chunks: {str(e)}"}
 
-    print("stored in vector db:", vector_db[category])
-
-    return {"message": "Document processed successfully", "category": category, "chunks added": len(text_chunks)}
+    return {
+        "message": f"{len(files)} file(s) processed successfully.",
+        "category": category,
+        "chunks_added": len(all_chunks)
+    }
 
 
 # Predefined categories & descriptions
 CATEGORY_DESCRIPTIONS = {
-    "medical": "Health records, prescriptions, diagnosis reports, medical history",
-    # "finance": "Investment details, salary statements, budget plans, bank transactions",
-    "academic": "Exam results, grades, GPA, coursework, academic performance, jobs",
-    "legal": "Contracts, agreements, property documents, legal papers",
-    "personal": "Diary entries, personal notes, memories, family records, identity cards"
+    "medical": (
+        "Health records, doctor prescriptions, medical reports, diagnosis documents, "
+        "lab test results, hospital bills, vaccination history, health insurance papers, "
+        "radiology scans, surgery notes, clinical notes, prescriptions."
+    ),
+    "academic": (
+        "Educational documents, exam results, report cards, transcripts, GPA reports, "
+        "certificates, project submissions, coursework, degree completion, academic papers, "
+        "student ID, resume for internships or jobs, recommendation letters."
+    ),
+    "legal": (
+        "Legal contracts, court documents, affidavits, property ownership papers, legal agreements, "
+        "government-issued documents, rental agreements, licenses, power of attorney, notary documents, "
+        "wills, legal notices, deeds, judicial records."
+    ),
+    "personal": (
+        "Personal notes, family letters, identity cards (passport, Aadhar, PAN), birthday invitations, "
+        "travel plans, insurance documents, diaries, photographs with captions, memories, family trees, "
+        "journal entries, personal resumes, handwritten notes, life planning documents."
+    )
 }
 
 
@@ -152,12 +176,12 @@ def get_category_from_query(query):
 
     # Compute cosine similarity
     similarities = {category: cosine_similarity([query_vector], [vector])[0][0] for category, vector in category_vectors.items()}
-
+    print(similarities)
     best_category = max(similarities, key=similarities.get)
     best_score = similarities[best_category]
 
-    if best_score < 0.4: # confidence threshold
-        return None # uncertain classification
+    # if best_score < 0.4: # confidence threshold
+    #     return None # uncertain classification
     print(best_category)
     return best_category
 
@@ -167,6 +191,7 @@ def get_category_from_query(query):
 async def ask_question(query: str = Form(...)):
     global vector_db
     category = get_category_from_query(query)
+    print("category", category)
    
 
     if not category or category not in vector_db:
@@ -185,29 +210,28 @@ async def ask_question(query: str = Form(...)):
         # print(response)
         # return {"answer": response, "category_used": category}
 
-        document_context = "\n\n".join([doc.page_content for doc in retrieved_docs[:3]])  # Limit to 3 docs for token efficiency
+        document_context = "\n\n".join([doc.page_content for doc in retrieved_docs])  # Limit to 3 docs for token efficiency
 
         # prompt to force GPT to use retrieved documents
         prompt = f"""
-        You are an AI assistant that can provide insights based on both:
-        1. The user's personal documents (extracted from their uploads).
-        2. Your general AI knowledge.
+            You are a helpful assistant. A user has uploaded documents under the category "{category}" and asked a question.
 
-        **User's Document Category:** {category}
+            Your job is to:
+            - Use the document context below to answer the question directly.
+            - If the documents do not contain the full answer, supplement with general knowledge but make it clear.
+            - Keep the response factual, concise, and well-structured.
 
-        **Extracted Document Context:** 
-        {document_context}
+            DOCUMENT CONTEXT:
+            {document_context}
 
-        **User Question:** {query}
+            QUESTION:
+            {query}
 
-        **Instructions for Answering:**
-        - Use the extracted document context where relevant.
-        - If the documents don't fully answer the question, provide insights based on general AI knowledge.
-        - Ensure the response is relevant to the category: {category}.
-        - Structure the response clearly and concisely.
-        """
+            ANSWER:
+            """
 
-        llm = ChatOpenAI()
+
+        llm = ChatOpenAI(model="gpt-4-turbo")
         response_message = llm.invoke(prompt) 
 
         response_text = response_message.content
